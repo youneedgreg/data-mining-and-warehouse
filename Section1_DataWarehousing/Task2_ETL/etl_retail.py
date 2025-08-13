@@ -180,7 +180,6 @@ class RetailETL:
         product_dim['product_id'] = range(1, len(product_dim) + 1)
         product_dim['product_code'] = product_dim['StockCode']
         product_dim['product_name'] = product_dim['Description']
-        product_dim['category'] = product_dim['Category']
         
         # Create fact table with foreign keys
         fact_table = df.copy()
@@ -347,8 +346,8 @@ def main():
     # Run the ETL pipeline
     extracted, transformed, loaded = etl.run_etl()
     
-    print(f"\n✅ ETL Process Complete!")
-    print(f"📊 Statistics:")
+    print(f"ETL Process Complete!")
+    print(f"Statistics:")
     print(f"  - Extracted: {extracted} rows")
     print(f"  - Transformed: {transformed} rows")
     print(f"  - Loaded: {loaded} rows")

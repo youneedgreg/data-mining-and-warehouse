@@ -45,6 +45,49 @@ class OLAPAnalysis:
         ORDER BY c.Country, t.year, t.quarter
         """
         
+        return self.execute_query(query, "ROLL-UP: Sales by Country and Quarter")
+    
+    def drilldown_query(self, country='USA') -> pd.DataFrame:
+        """Drill-down: Sales details for specific country by month"""
+        query = f"""
+        SELECT 
+            t.year,
+            t.month,
+            t.month_name,
+            p.category,
+            SUM(s.total_amount) as total_sales,
+            SUM(s.quantity) as total_quantity,
+            COUNT(DISTINCT s.customer_id) as unique_customers
+        FROM SalesFact s
+        JOIN CustomerDim c ON s.customer_id = c.customer_id
+        JOIN TimeDim t ON s.time_id = t.time_id
+        JOIN ProductDim p ON s.product_id = p.product_id
+        WHERE c.Country = '{country}'
+        GROUP BY t.year, t.month, t.month_name, p.category
+        ORDER BY t.year, t.month
+        """
+        
+        return self.execute_query(query, f"DRILL-DOWN: {country} Sales by Month and Category")
+    
+    def slice_query(self, category='Electronics') -> pd.DataFrame:
+        """Slice: Total sales for specific category"""
+        query = f"""
+        SELECT 
+            p.product_name,
+            c.Country,
+            SUM(s.quantity) as total_quantity_sold,
+            SUM(s.total_amount) as total_revenue,
+            AVG(s.unit_price) as avg_price,
+            COUNT(DISTINCT s.customer_id) as unique_customers
+        FROM SalesFact s
+        JOIN ProductDim p ON s.product_id = p.product_id
+        JOIN CustomerDim c ON s.customer_id = c.customer_id
+        WHERE p.category = '{category}'
+        GROUP BY p.product_name, c.Country
+        ORDER BY total_revenue DESC
+        LIMIT 20
+        """
+    
         return self.execute_query(query, f"SLICE: {category} Category Sales")
     
     def create_visualization(self, df: pd.DataFrame, viz_type: str = 'country_sales') -> None:
@@ -147,7 +190,7 @@ The data warehouse implementation successfully enables comprehensive business in
         results['slice'] = self.slice_query('Electronics')
         
         # Create visualizations
-        print("\n📊 Creating Visualizations...")
+        print("\nCreating Visualizations...")
         self.create_visualization(results['rollup'], 'country_sales')
         self.create_visualization(results['rollup'], 'quarterly_trend')
         
@@ -155,12 +198,12 @@ The data warehouse implementation successfully enables comprehensive business in
         report = self.generate_analysis_report(results)
         with open('olap_analysis_report.md', 'w') as f:
             f.write(report)
-        print("\n📝 Analysis report saved to 'olap_analysis_report.md'")
+        print("\nAnalysis report saved to 'olap_analysis_report.md'")
         
         # Save queries to SQL file
         self.save_queries_to_file()
         
-        print("\n✅ OLAP Analysis Complete!")
+        print("\nOLAP Analysis Complete!")
         print("Generated files:")
         print("  - sales_by_country.png")
         print("  - quarterly_trend.png")
@@ -240,47 +283,4 @@ def main():
     analyzer.run_complete_analysis()
 
 if __name__ == "__main__":
-    main(), "ROLL-UP: Sales by Country and Quarter")
-    
-    def drilldown_query(self, country='USA') -> pd.DataFrame:
-        """Drill-down: Sales details for specific country by month"""
-        query = f"""
-        SELECT 
-            t.year,
-            t.month,
-            t.month_name,
-            p.category,
-            SUM(s.total_amount) as total_sales,
-            SUM(s.quantity) as total_quantity,
-            COUNT(DISTINCT s.customer_id) as unique_customers
-        FROM SalesFact s
-        JOIN CustomerDim c ON s.customer_id = c.customer_id
-        JOIN TimeDim t ON s.time_id = t.time_id
-        JOIN ProductDim p ON s.product_id = p.product_id
-        WHERE c.Country = '{country}'
-        GROUP BY t.year, t.month, t.month_name, p.category
-        ORDER BY t.year, t.month
-        """
-        
-        return self.execute_query(query, f"DRILL-DOWN: {country} Sales by Month and Category")
-    
-    def slice_query(self, category='Electronics') -> pd.DataFrame:
-        """Slice: Total sales for specific category"""
-        query = f"""
-        SELECT 
-            p.product_name,
-            c.Country,
-            SUM(s.quantity) as total_quantity_sold,
-            SUM(s.total_amount) as total_revenue,
-            AVG(s.unit_price) as avg_price,
-            COUNT(DISTINCT s.customer_id) as unique_customers
-        FROM SalesFact s
-        JOIN ProductDim p ON s.product_id = p.product_id
-        JOIN CustomerDim c ON s.customer_id = c.customer_id
-        WHERE p.category = '{category}'
-        GROUP BY p.product_name, c.Country
-        ORDER BY total_revenue DESC
-        LIMIT 20
-        """
-        
-        return self.execute_query(query
+    main() 
