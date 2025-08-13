@@ -1,0 +1,358 @@
+"""
+ETL Process Implementation for Retail Data Warehouse
+Task 2: ETL Process Implementation (20 Marks)
+"""
+
+import pandas as pd
+import numpy as np
+import sqlite3
+from datetime import datetime, timedelta
+import random
+import logging
+from typing import Tuple, Dict
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class RetailETL:
+    """ETL Pipeline for Retail Data Warehouse"""
+    
+    def __init__(self, db_path='retail_dw.db'):
+        self.db_path = db_path
+        self.conn = None
+        self.raw_data = None
+        self.transformed_data = {}
+        
+    def generate_synthetic_data(self, num_rows=1000, seed=42) -> pd.DataFrame:
+        """Generate synthetic retail data"""
+        np.random.seed(seed)
+        random.seed(seed)
+        
+        logger.info(f"Generating {num_rows} rows of synthetic retail data...")
+        
+        # Define data pools
+        products = [
+            ('ELEC001', 'Laptop', 'Electronics', 899.99),
+            ('ELEC002', 'Smartphone', 'Electronics', 599.99),
+            ('ELEC003', 'Tablet', 'Electronics', 399.99),
+            ('ELEC004', 'Headphones', 'Electronics', 149.99),
+            ('ELEC005', 'Smart Watch', 'Electronics', 299.99),
+            ('CLTH001', 'T-Shirt', 'Clothing', 29.99),
+            ('CLTH002', 'Jeans', 'Clothing', 79.99),
+            ('CLTH003', 'Jacket', 'Clothing', 129.99),
+            ('CLTH004', 'Shoes', 'Clothing', 89.99),
+            ('CLTH005', 'Hat', 'Clothing', 24.99),
+            ('HOME001', 'Coffee Maker', 'Home', 79.99),
+            ('HOME002', 'Blender', 'Home', 49.99),
+            ('HOME003', 'Toaster', 'Home', 34.99),
+            ('BOOK001', 'Novel', 'Books', 14.99),
+            ('BOOK002', 'Textbook', 'Books', 89.99),
+        ]
+        
+        countries = ['USA', 'UK', 'Germany', 'France', 'Canada', 'Australia', 'Japan', 'Brazil']
+        customer_ids = [f'CUST{str(i).zfill(4)}' for i in range(1, 101)]
+        
+        # Generate dates over past 2 years
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=730)
+        
+        data = []
+        for i in range(num_rows):
+            # Random date
+            days_offset = random.randint(0, 730)
+            invoice_date = start_date + timedelta(days=days_offset)
+            
+            # Random product
+            product = random.choice(products)
+            
+            # Random quantity (with some negative for returns)
+            quantity = random.choices(
+                [random.randint(1, 10), random.randint(-3, -1)],
+                weights=[0.95, 0.05]
+            )[0]
+            
+            # Price variation (±10% from base price)
+            unit_price = product[3] * random.uniform(0.9, 1.1)
+            
+            data.append({
+                'InvoiceNo': f'INV{str(i+1).zfill(6)}',
+                'StockCode': product[0],
+                'Description': product[1],
+                'Category': product[2],
+                'Quantity': quantity,
+                'InvoiceDate': invoice_date,
+                'UnitPrice': round(unit_price, 2),
+                'CustomerID': random.choice(customer_ids),
+                'Country': random.choice(countries)
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Add some missing values for demonstration
+        missing_indices = np.random.choice(df.index, size=int(0.02 * len(df)), replace=False)
+        df.loc[missing_indices, 'CustomerID'] = np.nan
+        
+        logger.info(f"Generated {len(df)} rows of synthetic data")
+        return df
+    
+    def extract(self, data_source=None) -> pd.DataFrame:
+        """Extract phase: Load data from CSV or use generated data"""
+        logger.info("Starting EXTRACT phase...")
+        
+        if data_source is None:
+            # Generate synthetic data
+            self.raw_data = self.generate_synthetic_data()
+        else:
+            # Load from CSV
+            self.raw_data = pd.read_csv(data_source)
+            logger.info(f"Loaded {len(self.raw_data)} rows from {data_source}")
+        
+        # Convert InvoiceDate to datetime
+        self.raw_data['InvoiceDate'] = pd.to_datetime(self.raw_data['InvoiceDate'])
+        
+        logger.info(f"Extracted {len(self.raw_data)} total rows")
+        logger.info(f"Columns: {list(self.raw_data.columns)}")
+        logger.info(f"Missing values:\n{self.raw_data.isnull().sum()}")
+        
+        return self.raw_data
+    
+    def transform(self) -> Dict[str, pd.DataFrame]:
+        """Transform phase: Clean, calculate, and prepare dimension tables"""
+        logger.info("Starting TRANSFORM phase...")
+        
+        df = self.raw_data.copy()
+        initial_rows = len(df)
+        
+        # 1. Handle missing values
+        logger.info("Handling missing values...")
+        df['CustomerID'] = df['CustomerID'].fillna('UNKNOWN')
+        
+        # 2. Remove outliers (negative quantity and zero/negative prices)
+        logger.info("Removing outliers...")
+        df = df[df['Quantity'] > 0]
+        df = df[df['UnitPrice'] > 0]
+        outliers_removed = initial_rows - len(df)
+        logger.info(f"Removed {outliers_removed} rows with outliers")
+        
+        # 3. Calculate TotalSales
+        df['TotalSales'] = df['Quantity'] * df['UnitPrice']
+        
+        # 4. Filter for last year (from August 12, 2025)
+        current_date = datetime(2025, 8, 12)
+        one_year_ago = current_date - timedelta(days=365)
+        df = df[df['InvoiceDate'] >= one_year_ago]
+        logger.info(f"Filtered to {len(df)} rows for last year")
+        
+        # 5. Create dimension tables
+        
+        # Time Dimension
+        time_dim = pd.DataFrame()
+        time_dim['time_id'] = range(1, len(df) + 1)
+        time_dim['date'] = df['InvoiceDate'].values
+        time_dim['day'] = pd.to_datetime(time_dim['date']).dt.day
+        time_dim['month'] = pd.to_datetime(time_dim['date']).dt.month
+        time_dim['quarter'] = pd.to_datetime(time_dim['date']).dt.quarter
+        time_dim['year'] = pd.to_datetime(time_dim['date']).dt.year
+        time_dim['day_of_week'] = pd.to_datetime(time_dim['date']).dt.day_name()
+        time_dim['month_name'] = pd.to_datetime(time_dim['date']).dt.month_name()
+        time_dim['is_weekend'] = pd.to_datetime(time_dim['date']).dt.dayofweek >= 5
+        time_dim = time_dim.drop_duplicates(subset=['date'])
+        
+        # Customer Dimension
+        customer_dim = df[['CustomerID', 'Country']].drop_duplicates()
+        customer_dim = customer_dim.reset_index(drop=True)
+        customer_dim['customer_id'] = range(1, len(customer_dim) + 1)
+        customer_dim['customer_name'] = customer_dim['CustomerID'].apply(
+            lambda x: f"Customer {x}" if x != 'UNKNOWN' else 'Unknown Customer'
+        )
+        customer_dim['customer_segment'] = np.random.choice(
+            ['Premium', 'Standard', 'Basic'], 
+            size=len(customer_dim)
+        )
+        
+        # Product Dimension
+        product_dim = df[['StockCode', 'Description', 'Category']].drop_duplicates()
+        product_dim = product_dim.reset_index(drop=True)
+        product_dim['product_id'] = range(1, len(product_dim) + 1)
+        product_dim['product_code'] = product_dim['StockCode']
+        product_dim['product_name'] = product_dim['Description']
+        product_dim['category'] = product_dim['Category']
+        
+        # Create fact table with foreign keys
+        fact_table = df.copy()
+        
+        # Map to dimension IDs
+        fact_table = fact_table.merge(
+            time_dim[['date', 'time_id']], 
+            left_on='InvoiceDate', 
+            right_on='date',
+            how='left'
+        )
+        fact_table = fact_table.merge(
+            customer_dim[['CustomerID', 'customer_id']], 
+            on='CustomerID',
+            how='left'
+        )
+        fact_table = fact_table.merge(
+            product_dim[['StockCode', 'product_id']], 
+            on='StockCode',
+            how='left'
+        )
+        
+        # Sales Fact table
+        sales_fact = pd.DataFrame({
+            'time_id': fact_table['time_id'],
+            'customer_id': fact_table['customer_id'],
+            'product_id': fact_table['product_id'],
+            'invoice_no': fact_table['InvoiceNo'],
+            'quantity': fact_table['Quantity'],
+            'unit_price': fact_table['UnitPrice'],
+            'total_amount': fact_table['TotalSales']
+        })
+        
+        self.transformed_data = {
+            'sales_fact': sales_fact,
+            'time_dim': time_dim,
+            'customer_dim': customer_dim,
+            'product_dim': product_dim
+        }
+        
+        logger.info(f"Transformation complete:")
+        for table_name, table_df in self.transformed_data.items():
+            logger.info(f"  {table_name}: {len(table_df)} rows")
+        
+        return self.transformed_data
+    
+    def load(self) -> None:
+        """Load phase: Insert data into SQLite database"""
+        logger.info("Starting LOAD phase...")
+        
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+            
+            # Create tables (using simplified schema)
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS TimeDim (
+                    time_id INTEGER PRIMARY KEY,
+                    date DATE,
+                    day INTEGER,
+                    month INTEGER,
+                    quarter INTEGER,
+                    year INTEGER,
+                    day_of_week TEXT,
+                    month_name TEXT,
+                    is_weekend BOOLEAN
+                )
+            ''')
+            
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS CustomerDim (
+                    customer_id INTEGER PRIMARY KEY,
+                    CustomerID TEXT,
+                    customer_name TEXT,
+                    Country TEXT,
+                    customer_segment TEXT
+                )
+            ''')
+            
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS ProductDim (
+                    product_id INTEGER PRIMARY KEY,
+                    product_code TEXT,
+                    product_name TEXT,
+                    category TEXT
+                )
+            ''')
+            
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS SalesFact (
+                    sale_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    time_id INTEGER,
+                    customer_id INTEGER,
+                    product_id INTEGER,
+                    invoice_no TEXT,
+                    quantity INTEGER,
+                    unit_price REAL,
+                    total_amount REAL,
+                    FOREIGN KEY (time_id) REFERENCES TimeDim(time_id),
+                    FOREIGN KEY (customer_id) REFERENCES CustomerDim(customer_id),
+                    FOREIGN KEY (product_id) REFERENCES ProductDim(product_id)
+                )
+            ''')
+            
+            # Load data into tables
+            self.transformed_data['time_dim'].to_sql(
+                'TimeDim', self.conn, if_exists='replace', index=False
+            )
+            self.transformed_data['customer_dim'].to_sql(
+                'CustomerDim', self.conn, if_exists='replace', index=False
+            )
+            self.transformed_data['product_dim'].to_sql(
+                'ProductDim', self.conn, if_exists='replace', index=False
+            )
+            self.transformed_data['sales_fact'].to_sql(
+                'SalesFact', self.conn, if_exists='replace', index=False
+            )
+            
+            self.conn.commit()
+            logger.info(f"Data successfully loaded to {self.db_path}")
+            
+            # Verify loaded data
+            for table in ['TimeDim', 'CustomerDim', 'ProductDim', 'SalesFact']:
+                count = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                logger.info(f"  {table}: {count} rows loaded")
+                
+        except Exception as e:
+            logger.error(f"Error during load phase: {e}")
+            if self.conn:
+                self.conn.rollback()
+            raise
+        finally:
+            if self.conn:
+                self.conn.close()
+    
+    def run_etl(self) -> Tuple[int, int, int]:
+        """Execute the complete ETL pipeline"""
+        logger.info("="*50)
+        logger.info("Starting ETL Pipeline")
+        logger.info("="*50)
+        
+        # Extract
+        extracted_data = self.extract()
+        extracted_rows = len(extracted_data)
+        
+        # Transform
+        transformed_data = self.transform()
+        transformed_rows = len(transformed_data['sales_fact'])
+        
+        # Load
+        self.load()
+        loaded_rows = transformed_rows
+        
+        logger.info("="*50)
+        logger.info("ETL Pipeline Complete")
+        logger.info(f"Rows processed - Extract: {extracted_rows}, Transform: {transformed_rows}, Load: {loaded_rows}")
+        logger.info("="*50)
+        
+        return extracted_rows, transformed_rows, loaded_rows
+
+def main():
+    """Main execution function"""
+    etl = RetailETL('retail_dw.db')
+    
+    # Run the ETL pipeline
+    extracted, transformed, loaded = etl.run_etl()
+    
+    print(f"\n✅ ETL Process Complete!")
+    print(f"📊 Statistics:")
+    print(f"  - Extracted: {extracted} rows")
+    print(f"  - Transformed: {transformed} rows")
+    print(f"  - Loaded: {loaded} rows")
+    print(f"  - Database: retail_dw.db")
+
+if __name__ == "__main__":
+    main()
